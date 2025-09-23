@@ -1,0 +1,371 @@
+#!/bin/bash
+#
+# Standalone post-commit hook to review code changes after commit.
+# Called by "git commit" after the commit is made.
+# This hook performs AI code review using Gemini API in pure bash.
+#
+# To enable this hook, copy this file to .git/hooks/post-commit and make it executable:
+# cp hooks/post-commit-standalone .git/hooks/post-commit
+# chmod +x .git/hooks/post-commit
+
+# ============================================================================
+# CONFIGURATION - MODIFY THESE VALUES
+# ============================================================================
+
+# Set your Gemini API key here
+GEMINI_API_KEY="your-gemini-api-key-here"
+
+# Minimum number of changes required for review (default: 15)
+MIN_CHANGES=15
+
+# Path to the prompt template file (relative to the script directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_template.txt"
+
+# ============================================================================
+# FUNCTIONS
+# ============================================================================
+
+# Function to check if required tools are available
+check_dependencies() {
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required but not installed."
+        exit 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "Warning: jq is not installed. JSON response will not be formatted."
+    fi
+}
+
+# Function to determine the target branch based on current branch name
+get_target_branch() {
+    local current_branch
+    current_branch=$(git branch --show-current 2>/dev/null)
+
+    if [ -z "$current_branch" ]; then
+        echo ""
+        return
+    fi
+
+    # Convert to lowercase for pattern matching
+    local branch_lower
+    branch_lower=$(echo "$current_branch" | tr '[:upper:]' '[:lower:]')
+
+    # Check patterns in order of precedence
+    case "$branch_lower" in
+        *dev*|*development*)
+            echo "development"
+            ;;
+        *ci*|*master*)
+            echo "master"
+            ;;
+        *release*|*prod*|*production*)
+            echo "release"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+# Function to get the git diff
+get_git_diff() {
+    local commit_hash="$1"
+    local target_branch
+    target_branch=$(get_target_branch)
+
+    if [ -n "$target_branch" ]; then
+        # Check if target branch exists
+        if git rev-parse --verify "$target_branch" >/dev/null 2>&1; then
+            echo "Comparing against target branch: $target_branch" >&2
+            git diff "$target_branch" "$commit_hash"
+        else
+            echo "Target branch '$target_branch' not found, falling back to parent commit" >&2
+            get_git_diff_fallback "$commit_hash"
+        fi
+    else
+        echo "No target branch pattern detected, using parent commit" >&2
+        get_git_diff_fallback "$commit_hash"
+    fi
+}
+
+# Fallback function for git diff using parent commit
+get_git_diff_fallback() {
+    local commit_hash="$1"
+    local parent_hash
+
+    # Get parent commit hash
+    parent_hash=$(git rev-parse "$commit_hash^" 2>/dev/null)
+    if [ $? -ne 0 ]; then
+        # This is likely the initial commit
+        parent_hash=$(git hash-object -t tree /dev/null)
+    fi
+
+    # Generate diff between parent and current commit
+    git diff "$parent_hash" "$commit_hash"
+}
+
+# Function to count changes in diff
+count_changes() {
+    local diff_content="$1"
+    echo "$diff_content" | grep -c "^+" || echo "0"
+}
+
+# Function to check if commit has minimum changes
+has_minimum_changes() {
+    local diff_content="$1"
+    local change_count
+    change_count=$(count_changes "$diff_content")
+
+    echo "Found $change_count added lines"
+
+    if [ "$change_count" -lt "$MIN_CHANGES" ]; then
+        echo "Skipping AI review: Not enough changes ($change_count < $MIN_CHANGES)"
+        return 1
+    fi
+
+    return 0
+}
+
+# Function to filter relevant files (similar to lambda logic)
+is_relevant_file() {
+    local file_path="$1"
+
+    # Skip files containing 'enum', 'constant', or ending with .yml
+    case "$file_path" in
+        *enum*|*constant*|*.yml)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
+
+# Function to filter the diff content to only include relevant files
+filter_diff_content() {
+    local diff_content="$1"
+    local filtered_diff=""
+    local include_line=false
+    local current_file=""
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^diff\ --git ]]; then
+            # Extract file path from diff header
+            current_file=$(echo "$line" | sed 's/^diff --git a\/\(.*\) b\/.*$/\1/')
+            if is_relevant_file "$current_file"; then
+                include_line=true
+                echo "Including file in review: $current_file" >&2
+                filtered_diff="$filtered_diff$line"$'\n'
+            else
+                include_line=false
+                echo "Skipping file: $current_file" >&2
+            fi
+        elif [[ "$include_line" == true ]]; then
+            filtered_diff="$filtered_diff$line"$'\n'
+        fi
+    done <<< "$diff_content"
+
+    echo "$filtered_diff"
+}
+
+# Function to escape JSON strings
+escape_json() {
+    local input="$1"
+    # Escape backslashes, quotes, and newlines for JSON
+    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
+}
+
+# Function to call Gemini API
+call_gemini_api() {
+    local prompt="$1"
+    local temp_response="/tmp/gemini_response_$$.json"
+    local temp_payload="/tmp/gemini_payload_$$.json"
+
+    echo "Calling Gemini API for code review..."
+
+    # Escape the prompt for JSON
+    local escaped_prompt
+    escaped_prompt=$(escape_json "$prompt")
+
+    # Create JSON payload
+    cat > "$temp_payload" <<EOF
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "$escaped_prompt"
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+    # Make API call to Gemini
+    curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d @"$temp_payload" \
+        "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent?key=$GEMINI_API_KEY" \
+        > "$temp_response"
+
+    local curl_exit_code=$?
+    rm -f "$temp_payload"
+
+    if [ $curl_exit_code -ne 0 ]; then
+        echo "Error: Failed to call Gemini API"
+        rm -f "$temp_response"
+        return 1
+    fi
+
+    # Extract text from response
+    if command -v jq >/dev/null 2>&1; then
+        local response_text
+        response_text=$(jq -r '.candidates[0].content.parts[0].text // "Error: No response text found"' "$temp_response" 2>/dev/null)
+        if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
+            echo "$response_text"
+        else
+            echo "Error: Unable to parse Gemini API response" >&2
+            echo "Response content:" >&2
+            cat "$temp_response" >&2
+            rm -f "$temp_response"
+            return 1
+        fi
+    else
+        # Fallback if jq is not available - try basic text extraction
+        local response_content
+        response_content=$(cat "$temp_response")
+        echo "Raw API Response (jq not available):" >&2
+        echo "$response_content" >&2
+    fi
+
+    rm -f "$temp_response"
+    return 0
+}
+
+# Function to load prompt template from external file
+load_prompt_template() {
+    if [ ! -f "$PROMPT_TEMPLATE_FILE" ]; then
+        echo "Error: Prompt template file not found at: $PROMPT_TEMPLATE_FILE"
+        echo "Make sure the prompt_template.txt file exists in the hooks directory."
+        exit 1
+    fi
+
+    cat "$PROMPT_TEMPLATE_FILE"
+}
+
+# Function to check if analysis shows no issues
+has_no_issues() {
+    local comment="$1"
+
+    # Check for "No se encontraron problemas" in both REST and Swagger sections
+    echo "$comment" | grep -q "# Violaciones de lineamientos REST" && \
+    echo "$comment" | grep -q "# Violaciones de lineamientos de Swagger" && \
+    echo "$comment" | grep -A 10 "# Violaciones de lineamientos REST" | grep -q "_No se encontraron problemas_" && \
+    echo "$comment" | grep -A 10 "# Violaciones de lineamientos de Swagger" | grep -q "_No se encontraron problemas_"
+}
+
+# ============================================================================
+# MAIN LOGIC
+# ============================================================================
+
+echo "=== Post-commit AI Code Review ==="
+
+# Check if we should skip the review
+if [ -n "${SKIP_AI_REVIEW:-}" ]; then
+    echo "SKIP_AI_REVIEW is set. Skipping review."
+    exit 0
+fi
+
+# Check if API key is configured
+if [ "$GEMINI_API_KEY" = "your-gemini-api-key-here" ]; then
+    echo "Error: Please configure your GEMINI_API_KEY in the post-commit hook"
+    echo "Edit the script and replace 'your-gemini-api-key-here' with your actual API key"
+    exit 1
+fi
+
+# Check dependencies
+check_dependencies
+
+# Verify we have a valid commit
+if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+    echo "No commits to review yet."
+    exit 0
+fi
+
+# Get the current commit hash
+CURRENT_COMMIT=$(git rev-parse HEAD)
+echo "Reviewing commit: $CURRENT_COMMIT"
+
+# Get commit message for context
+COMMIT_MESSAGE=$(git log -1 --pretty=format:"%s" "$CURRENT_COMMIT")
+echo "Commit message: $COMMIT_MESSAGE"
+
+# Get the diff for the current commit
+echo "Generating diff..."
+DIFF_CONTENT=$(get_git_diff "$CURRENT_COMMIT")
+
+if [ -z "$DIFF_CONTENT" ]; then
+    echo "No changes detected in this commit. Skipping review."
+    exit 0
+fi
+
+# Check if there are enough changes to warrant review
+if ! has_minimum_changes "$DIFF_CONTENT"; then
+    exit 0
+fi
+
+# Filter diff to only include relevant files
+echo "Filtering relevant files..."
+FILTERED_DIFF=$(filter_diff_content "$DIFF_CONTENT")
+
+# If no relevant files, skip review
+if [ -z "$FILTERED_DIFF" ]; then
+    echo "No relevant files found for review. Skipping."
+    exit 0
+fi
+
+# Load the prompt template from external file
+echo "Loading prompt template..."
+PR_REVIEW_PROMPT=$(load_prompt_template)
+
+# Create the full prompt
+FULL_PROMPT="The PR diff is:
+\`\`\`diff
+$FILTERED_DIFF
+\`\`\`
+
+$PR_REVIEW_PROMPT"
+
+# Call Gemini API
+REVIEW_RESULT=$(call_gemini_api "$FULL_PROMPT")
+
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to get AI review"
+    exit 1
+fi
+
+# Save review to file in the repository root
+REPO_ROOT=$(git rev-parse --show-toplevel)
+REVIEW_FILE="$REPO_ROOT/commit_review_$(date +%Y%m%d_%H%M%S).md"
+echo "$REVIEW_RESULT" > "$REVIEW_FILE"
+
+# Display results
+echo ""
+echo "=== AI Code Review Results ==="
+echo "$REVIEW_RESULT"
+echo ""
+echo "Review saved to: $REVIEW_FILE"
+
+# Check if there are no issues (similar to lambda logic)
+if has_no_issues "$REVIEW_RESULT"; then
+    echo ""
+    echo "✅ No issues found in the code review!"
+else
+    echo ""
+    echo "⚠️  Issues found in the code review. Please review the feedback above."
+fi
+
+echo "=== Post-commit review completed ==="
