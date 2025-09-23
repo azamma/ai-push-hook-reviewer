@@ -149,7 +149,7 @@ Calling Gemini API for code review...
 ## Violaciones de lineamientos de Swagger
 - _No se encontraron problemas_
 
-Review saved to: /tmp/commit_review_20240923_143022.md
+Review saved to: /path/to/your/repo/commit_review_20240923_143022.md
 
 ⚠️  Issues found in the code review. Please review the feedback above.
 === Post-commit review completed ===
