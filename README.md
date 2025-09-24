@@ -5,12 +5,6 @@ Este directorio contiene hooks de Git para realizar revisiones automáticas de c
 ## Archivos Disponibles
 
 ### 1. `post-commit` (Existente)
-Hook que utiliza el código Python del Lambda para realizar la revisión. Requiere:
-- Python 3
-- Dependencias del proyecto instaladas
-- Configuración de API key via archivo `.gemini_api_key` o variable de entorno
-
-### 2. `post-commit-standalone` (Nuevo)
 Hook completamente independiente en Bash que replica la funcionalidad del Lambda.
 
 **Características:**
@@ -35,14 +29,7 @@ Archivo de plantilla que contiene el prompt completo utilizado por el hook stand
 
 ### 1. Instalar el Hook
 
-```bash
-# Copiar el hook y el template al directorio de Git hooks
-cp hooks/post-commit-standalone .git/hooks/post-commit
-cp hooks/prompt_template.txt .git/hooks/prompt_template.txt
-
-# Hacer el archivo ejecutable
-chmod +x .git/hooks/post-commit
-```
+Se deben mover el post-commit y el template a su carpeta de hooks
 
 ### 2. Configurar la API Key de Gemini
 
