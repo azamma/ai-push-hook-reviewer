@@ -5,7 +5,7 @@
 # This hook performs AI code review using Gemini API in pure bash.
 #
 # To enable this hook, copy this file to .git/hooks/post-commit and make it executable:
-# cp hooks/post-commit-standalone .git/hooks/post-commit
+# Locate the file post-commit and prompt_template.txt in .git/hooks/post-commit
 # chmod +x .git/hooks/post-commit
 
 # ============================================================================
