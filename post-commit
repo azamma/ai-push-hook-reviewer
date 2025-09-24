@@ -15,8 +15,8 @@
 # Set your Gemini API key here
 GEMINI_API_KEY="your-gemini-api-key-here"
 
-# Minimum number of changes required for review (default: 15)
-MIN_CHANGES=15
+# Minimum number of changes required for review (default: 1)
+MIN_CHANGES=1
 
 # Path to the prompt template file (relative to the script directory)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

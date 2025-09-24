@@ -47,7 +47,7 @@ Puedes modificar estas variables en el script:
 
 ```bash
 # Mínimo número de cambios requeridos para ejecutar la revisión
-MIN_CHANGES=15
+MIN_CHANGES=1
 ```
 
 ### 4. Desactivar Temporalmente
