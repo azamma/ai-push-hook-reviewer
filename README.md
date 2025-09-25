@@ -1,10 +1,10 @@
-# Git Hooks para Revisión de Código con IA
+# pre-push para Revisión de Código con IA
 
-Este directorio contiene hooks de Git para realizar revisiones automáticas de código usando la API de Gemini.
+Este directorio contiene un hook `pre-push` de Git para realizar revisiones automáticas de código usando la API de Gemini.
 
 ## Archivos Disponibles
 
-### 1. `post-commit` (Existente)
+### 1. `pre-push`
 Hook completamente independiente en Bash que replica la funcionalidad del Lambda.
 
 **Características:**
@@ -18,22 +18,23 @@ Hook completamente independiente en Bash que replica la funcionalidad del Lambda
 - ✅ Detecta automáticamente cuando no hay problemas
 - ✅ Guarda resultados en archivos temporales
 - ✅ Funciona sin `jq` (con extracción JSON nativa)
+- 🛑 **Bloqueo de push** si se detectan problemas
 
-### 3. `prompt_template.txt` (Nuevo)
-Archivo de plantilla que contiene el prompt completo utilizado por el hook standalone. Este archivo permite:
+### 2. `prompt_template.txt`
+Archivo de plantilla que contiene el prompt completo utilizado por el hook. Este archivo permite:
 - ✅ Editar el prompt sin modificar el código del script
 - ✅ Mantener sincronizado el prompt con el Lambda
 - ✅ Personalizar lineamientos REST y Swagger según el proyecto
 
-## Configuración del Hook Standalone
+## Configuración del Hook
 
 ### 1. Instalar el Hook
 
-Se deben mover el post-commit y el template a su carpeta de hooks
+Se deben mover el `pre-push` y el `prompt_template.txt` a su carpeta de hooks: `.git/hooks/`
 
 ### 2. Configurar la API Key de Gemini
 
-Edita el archivo `.git/hooks/post-commit` y reemplaza:
+Edita el archivo `.git/hooks/pre-push` y reemplaza:
 
 ```bash
 GEMINI_API_KEY="your-gemini-api-key-here"
@@ -52,11 +53,24 @@ MIN_CHANGES=1
 
 ### 4. Desactivar Temporalmente
 
-Para saltar la revisión en un commit específico:
+Para saltar la revisión en un push específico:
 
 ```bash
-SKIP_AI_REVIEW=1 git commit -m "commit sin revisión"
+SKIP_AI_REVIEW=1 git push
 ```
+
+## Bloqueo de Push
+
+Si la revisión de la IA encuentra algún problema en las siguientes categorías, **el push será detenido**:
+- `Posibles Bugs`
+- `Posibles problemas de Diseño / SOLID`
+- `Posibles problemas de Clean Code`
+- `Violaciones de lineamientos REST`
+- `Violaciones de lineamientos de Swagger`
+
+El script revisa si estas secciones en la respuesta de la IA contienen algo diferente a "_No se encontraron problemas_". Si se genera un "Prompt AI para corregir errores detectados", el push también se detendrá.
+
+Para forzar el push, puedes usar la variable de entorno `SKIP_AI_REVIEW=1`.
 
 ## Dependencias
 
@@ -87,24 +101,24 @@ El hook utiliza **detección automática de la rama objetivo** basada en el nomb
 
 ## Funcionamiento
 
-El hook se ejecuta automáticamente después de cada commit y:
+El hook se ejecuta automáticamente antes de cada `push` y:
 
-1. **Detecta** la rama objetivo basada en el nombre de la rama actual
-2. **Verifica** que hay suficientes cambios para justificar una revisión
-3. **Genera** el diff contra la rama objetivo (o commit padre como fallback)
-4. **Filtra** solo archivos relevantes (excluye enums, constants, yml)
-5. **Carga** el template de prompt desde archivo externo
-6. **Envía** el diff a Gemini usando el mismo prompt que el Lambda
-7. **Extrae** la respuesta JSON (con o sin `jq`)
-8. **Muestra** los resultados en la terminal
-9. **Guarda** los resultados en `commit_review_YYYYMMDD_HHMMSS.md` en la raíz del repositorio
+1. **Detecta** la rama objetivo basada en el nombre de la rama actual.
+2. **Verifica** que hay suficientes cambios para justificar una revisión.
+3. **Genera** el diff contra la rama objetivo.
+4. **Filtra** solo archivos relevantes.
+5. **Carga** el template de prompt desde `prompt_template.txt`.
+6. **Envía** el diff a Gemini.
+7. **Extrae** y **analiza** la respuesta en busca de problemas.
+8. **Muestra** los resultados en la terminal.
+9. **Guarda** los resultados en un archivo.
+10. **Bloquea el `push`** si se encontraron problemas, saliendo con un código de error.
 
 ## Ejemplo de Salida
 
 ```
-=== Post-commit AI Code Review ===
-Reviewing commit: a1b2c3d4e5f6g7h8i9j0
-Commit message: Add new user validation logic
+=== Pre-push AI Code Review ===
+Reviewing changes before push...
 Comparing against target branch: development
 Found 23 added lines
 Filtering relevant files...
@@ -139,7 +153,11 @@ Calling Gemini API for code review...
 Review saved to: /path/to/your/repo/commit_review_20240923_143022.md
 
 ⚠️  Issues found in the code review. Please review the feedback above.
-=== Post-commit review completed ===
+=== Pre-push review completed ===
+
+[pre-push hook] *** PUSH REJECTED BY AI CODE REVIEW ***
+[pre-push hook] Issues found. Please fix them or use SKIP_AI_REVIEW=1 to bypass.
+error: failed to push some refs to '...'
 ```
 
 ## Solución de Problemas
@@ -158,13 +176,13 @@ brew install curl
 ```
 
 ### Error: "Failed to call Gemini API"
-- Verifica que tu API key sea válida
-- Confirma que tienes conexión a internet
-- Revisa que la API key tenga los permisos correctos
+- Verifica que tu API key sea válida.
+- Confirma que tienes conexión a internet.
+- Revisa que la API key tenga los permisos correctos.
 
 ### El hook no se ejecuta
-- Verifica que el archivo tiene permisos de ejecución: `ls -la .git/hooks/post-commit`
-- Confirma que el archivo está en la ubicación correcta: `.git/hooks/post-commit`
+- Verifica que el archivo tiene permisos de ejecución: `ls -la .git/hooks/pre-push`
+- Confirma que el archivo está en la ubicación correcta: `.git/hooks/pre-push`
 
 ### Warning: "jq is not installed"
 El script funciona perfectamente sin `jq`, pero para mejor procesamiento de JSON puedes instalarlo:
@@ -180,9 +198,8 @@ brew install jq
 ```
 
 ### Error: "Prompt template file not found"
-- Asegúrate de haber copiado `prompt_template.txt` junto con el hook
-- Verifica que el archivo esté en el mismo directorio que el script
-- El script busca el template en: `.git/hooks/prompt_template.txt`
+- Asegúrate de haber copiado `prompt_template.txt` junto con el hook.
+- Verifica que el archivo esté en el mismo directorio que el script: `.git/hooks/prompt_template.txt`
 
 ## Comparación con el Lambda Original
 
@@ -196,6 +213,7 @@ brew install jq
 | Límite mínimo cambios | Idéntico | Idéntico |
 | Detección "sin problemas" | Idéntico | Idéntico |
 | Comparación Git | Commits específicos de PR | **Detección inteligente de rama objetivo** |
-| Integración | AWS CodeCommit | Git local |
+| Integración | AWS CodeCommit | Git local (`pre-push`) |
 | Portabilidad | Específica AWS | Universal |
 | Extracción JSON | Biblioteca Python | Nativo bash (con fallback sin jq) |
+

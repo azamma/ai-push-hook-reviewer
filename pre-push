@@ -328,7 +328,7 @@ if [ -z "$FILTERED_DIFF" ]; then
 fi
 
 # Load the prompt template from external file
-echo "Loading prompt template..."
+echo "Executing prompt please wait..."
 PR_REVIEW_PROMPT=$(load_prompt_template)
 
 # Create the full prompt
