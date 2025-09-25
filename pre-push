@@ -363,9 +363,33 @@ echo "Review saved to: $REVIEW_FILE"
 if has_no_issues "$REVIEW_RESULT"; then
     echo ""
     echo "✅ No issues found in the code review!"
+    echo ""
+    echo "¿Desea proceder con el push? (y/N): "
+    read -r user_response
+    case "$user_response" in
+        [yY]|[yY][eE][sS])
+            echo "Procediendo con el push..."
+            ;;
+        *)
+            echo "Push cancelado por el usuario."
+            exit 1
+            ;;
+    esac
 else
     echo ""
     echo "⚠️  Issues found in the code review. Please review the feedback above."
+    echo ""
+    echo "¿Desea proceder con el push de todas maneras? (y/N): "
+    read -r user_response
+    case "$user_response" in
+        [yY]|[yY][eE][sS])
+            echo "Procediendo con el push (issues ignorados)..."
+            ;;
+        *)
+            echo "Push cancelado. Corrija los problemas detectados antes de hacer push."
+            exit 1
+            ;;
+    esac
 fi
 
 echo "=== Post-commit review completed ==="
