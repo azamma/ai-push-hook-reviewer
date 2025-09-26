@@ -1,0 +1,199 @@
+#!/bin/bash
+#
+# post-push hook to generate PR details using Gemini API.
+#
+# To enable this hook, make it executable:
+# chmod +x .git/hooks/post-push
+
+# ============================================================================
+# CONFIGURATION - MODIFY THESE VALUES
+# ============================================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INI_FILE="$SCRIPT_DIR/gemini.ini"
+
+# Read API key and URL from gemini.ini
+GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+# Path to the prompt template file (relative to the script directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/pr_details_prompt_template.txt"
+
+# ============================================================================
+# FUNCTIONS
+# ============================================================================
+
+# Function to check if required tools are available
+check_dependencies() {
+    if ! command -v curl >/dev/null 2>&1; then
+        echo "Error: curl is required but not installed."
+        exit 1
+    fi
+}
+
+# Function to escape JSON strings
+escape_json() {
+    local input="$1"
+    # Escape backslashes, quotes, and newlines for JSON
+    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
+}
+
+# Function to call Gemini API
+call_gemini_api() {
+    local prompt="$1"
+    local temp_response="/tmp/gemini_response_$$.json"
+    local temp_payload="/tmp/gemini_payload_$$.json"
+
+    # Escape the prompt for JSON
+    local escaped_prompt
+    escaped_prompt=$(escape_json "$prompt")
+
+    # Create JSON payload
+    cat > "$temp_payload" <<EOF
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "$escaped_prompt"
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+    # Make API call to Gemini
+    curl -s -X POST \
+        -H "Content-Type: application/json" \
+        -d @"$temp_payload" \
+        "$GEMINI_API_URL?key=$GEMINI_API_KEY" \
+        > "$temp_response"
+
+    local curl_exit_code=$?
+    rm -f "$temp_payload"
+
+    if [ $curl_exit_code -ne 0 ]; then
+        echo "Error: Failed to call Gemini API"
+        rm -f "$temp_response"
+        return 1
+    fi
+
+    # Extract text from response
+    if command -v jq >/dev/null 2>&1; then
+        local response_text
+        response_text=$(jq -r '.candidates[0].content.parts[0].text // "Error: No response text found"' "$temp_response" 2>/dev/null)
+        if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
+            echo "$response_text"
+        else
+            echo "Error: Unable to parse Gemini API response" >&2
+            echo "Response content:" >&2
+            cat "$temp_response" >&2
+            rm -f "$temp_response"
+            return 1
+        fi
+    else
+        # Fallback if jq is not available - try basic text extraction
+        local response_content
+        response_content=$(cat "$temp_response")
+        echo "Raw API Response (jq not available):" >&2
+        echo "$response_content" >&2
+    fi
+
+    rm -f "$temp_response"
+    return 0
+}
+
+# Function to load prompt template from external file
+load_prompt_template() {
+    if [ ! -f "$PROMPT_TEMPLATE_FILE" ]; then
+        echo "Error: Prompt template file not found at: $PROMPT_TEMPLATE_FILE"
+        echo "Make sure the pr_details_prompt_template.txt file exists in the hooks directory."
+        exit 1
+    fi
+
+    cat "$PROMPT_TEMPLATE_FILE"
+}
+
+# ============================================================================
+# MAIN LOGIC
+# ============================================================================
+
+echo "=== Post-push PR Details Generation ==="
+
+# Check if API key is configured
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo "Error: Could not read GEMINI_API_KEY from gemini.ini"
+    echo "Please ensure gemini.ini exists in the repository root and contains 'api_key = your-key'"
+    exit 1
+fi
+
+# Check dependencies
+check_dependencies
+
+# Read the pushed refs from stdin
+refs_processed=false
+while read local_ref local_sha remote_ref remote_sha; do
+    # Skip empty lines
+    if [ -z "$local_ref" ]; then
+        continue
+    fi
+
+    refs_processed=true
+
+    # We only care about branches, not tags
+    if [[ $local_ref != refs/heads/* ]]; then
+        continue
+    fi
+
+    # Get the range of commits that were pushed
+    # If the remote branch was deleted, we can't get a diff
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        continue
+    fi
+
+    # If the remote branch is new, diff against the parent of the first commit
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        remote_sha=$(git rev-parse $local_sha^1)
+    fi
+
+    echo "Generating diff for $remote_sha..$local_sha"
+    DIFF_CONTENT=$(git diff "$remote_sha" "$local_sha")
+
+    if [ -z "$DIFF_CONTENT" ]; then
+        echo "No changes detected in this push. Skipping PR details generation."
+        continue
+    fi
+
+    # Load the prompt template from external file
+    echo "Loading prompt template..."
+    PR_DETAILS_PROMPT=$(load_prompt_template)
+
+    # Create the full prompt
+    FULL_PROMPT="The git diff is:
+
+    
+    $DIFF_CONTENT
+    
+
+    $PR_DETAILS_PROMPT"
+
+    # Call Gemini API
+    PR_DETAILS_RESULT=$(call_gemini_api "$FULL_PROMPT")
+
+    if [ $? -ne 0 ]; then
+        echo "Error: Failed to generate PR details"
+        continue
+    fi
+
+    # Save the result to a markdown file
+    BRANCH_NAME=$(echo $local_ref | sed 's/refs\/heads\///')
+    FILENAME="PR_DETAILS_$(echo $BRANCH_NAME | sed 's/\//_/g')_$(date +%Y%m%d%H%M%S).md"
+    echo "$PR_DETAILS_RESULT" > "$FILENAME"
+
+    echo "PR details saved to $FILENAME"
+done
+
+
+echo "=== Post-push PR details generation completed ==="

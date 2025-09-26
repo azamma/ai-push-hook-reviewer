@@ -1,26 +1,30 @@
 #!/bin/bash
 #
-# Standalone post-commit hook to review code changes after commit.
-# Called by "git commit" after the commit is made.
+# Standalone pre-push hook to review code changes before pushing.
+# Called by "git push" before the push is executed.
 # This hook performs AI code review using Gemini API in pure bash.
 #
-# To enable this hook, copy this file to .git/hooks/post-commit and make it executable:
-# Locate the file post-commit and prompt_template.txt in .git/hooks/post-commit
-# chmod +x .git/hooks/post-commit
+# To enable this hook, copy this file to .git/hooks/pre-push and make it executable:
+# cp pre-push .git/hooks/
+# cp prompt_template.txt .git/hooks/
+# chmod +x .git/hooks/pre-push
 
 # ============================================================================
 # CONFIGURATION - MODIFY THESE VALUES
 # ============================================================================
 
-# Set your Gemini API key here
-GEMINI_API_KEY="your-gemini-api-key-here"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INI_FILE="$SCRIPT_DIR/gemini.ini"
+
+# Read API key and URL from gemini.ini
+GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
 # Minimum number of changes required for review (default: 1)
 MIN_CHANGES=1
 
-# Path to the prompt template file (relative to the script directory)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_template.txt"
+
+PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/review_prompt_template.txt"
 
 # ============================================================================
 # FUNCTIONS
@@ -54,18 +58,18 @@ get_target_branch() {
 
     # Check patterns in order of precedence
     case "$branch_lower" in
-        *dev*|*development*)
+        *dev*|*development*) 
             echo "development"
-            ;;
-        *ci*|*master*)
+            ;; 
+        *ci*|*master*) 
             echo "master"
-            ;;
-        *release*|*prod*|*production*)
+            ;; 
+        *release*|*prod*|*production*) 
             echo "release"
-            ;;
+            ;; 
         *)
             echo ""
-            ;;
+            ;; 
     esac
 }
 
@@ -136,10 +140,10 @@ is_relevant_file() {
     case "$file_path" in
         *enum*|*constant*|*.yml)
             return 1
-            ;;
+            ;; 
         *)
             return 0
-            ;;
+            ;; 
     esac
 }
 
@@ -151,19 +155,20 @@ filter_diff_content() {
     local current_file=""
 
     while IFS= read -r line; do
+        line=${line%$'\r'}
         if [[ "$line" =~ ^diff\ --git ]]; then
             # Extract file path from diff header
             current_file=$(echo "$line" | sed 's/^diff --git a\/\(.*\) b\/.*$/\1/')
             if is_relevant_file "$current_file"; then
                 include_line=true
                 echo "Including file in review: $current_file" >&2
-                filtered_diff="$filtered_diff$line"$'\n'
+                filtered_diff+="$line"$'\n'
             else
                 include_line=false
                 echo "Skipping file: $current_file" >&2
             fi
         elif [[ "$include_line" == true ]]; then
-            filtered_diff="$filtered_diff$line"$'\n'
+            filtered_diff+="$line"$'\n'
         fi
     done <<< "$diff_content"
 
@@ -174,7 +179,7 @@ filter_diff_content() {
 escape_json() {
     local input="$1"
     # Escape backslashes, quotes, and newlines for JSON
-    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
+    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
 }
 
 # Function to call Gemini API
@@ -208,7 +213,7 @@ EOF
     curl -s -X POST \
         -H "Content-Type: application/json" \
         -d @"$temp_payload" \
-        "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent?key=$GEMINI_API_KEY" \
+        "$GEMINI_API_URL?key=$GEMINI_API_KEY" \
         > "$temp_response"
 
     local curl_exit_code=$?
@@ -260,29 +265,42 @@ load_prompt_template() {
 has_no_issues() {
     local comment="$1"
 
-    # Check for "No se encontraron problemas" in both REST and Swagger sections
-    echo "$comment" | grep -q "# Violaciones de lineamientos REST" && \
-    echo "$comment" | grep -q "# Violaciones de lineamientos de Swagger" && \
-    echo "$comment" | grep -A 10 "# Violaciones de lineamientos REST" | grep -q "_No se encontraron problemas_" && \
-    echo "$comment" | grep -A 10 "# Violaciones de lineamientos de Swagger" | grep -q "_No se encontraron problemas_"
+    # Check for issues in critical sections.
+    # We grep for the section header, then look at the next few lines.
+    # If any of these sections contain something other than "No se encontraron problemas", we have an issue.
+    if ! echo "$comment" | grep -A 3 "## Posibles Bugs" | grep -q "_No se encontraron problemas_"; then return 1; fi
+    if ! echo "$comment" | grep -A 3 "## Posibles problemas de Diseño / SOLID" | grep -q "_No se encontraron problemas_"; then return 1; fi
+    if ! echo "$comment" | grep -A 3 "## Posibles problemas de Clean Code" | grep -q "_No se encontraron problemas_"; then return 1; fi
+    if ! echo "$comment" | grep -A 3 "## Violaciones de lineamientos REST" | grep -q "_No se encontraron problemas_"; then return 1; fi
+    if ! echo "$comment" | grep -A 3 "## Violaciones de lineamientos de Swagger" | grep -q "_No se encontraron problemas_"; then return 1; fi
+
+    # If we've gotten this far, it means all critical sections are clean.
+    return 0
 }
 
 # ============================================================================
 # MAIN LOGIC
 # ============================================================================
 
-echo "=== Post-commit AI Code Review ==="
+# Capture stdin for post-push
+pushed_refs=$(cat)
+
+echo "=== Pre-push AI Code Review ==="
 
 # Check if we should skip the review
 if [ -n "${SKIP_AI_REVIEW:-}" ]; then
-    echo "SKIP_AI_REVIEW is set. Skipping review."
+    POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+    if [ -f "$POST_PUSH_SCRIPT" ]; then
+        echo "=== Executing pr-details script... ==="
+        echo "$pushed_refs" | "$POST_PUSH_SCRIPT"
+    fi
     exit 0
 fi
 
 # Check if API key is configured
-if [ "$GEMINI_API_KEY" = "your-gemini-api-key-here" ]; then
-    echo "Error: Please configure your GEMINI_API_KEY in the post-commit hook"
-    echo "Edit the script and replace 'your-gemini-api-key-here' with your actual API key"
+if [ -z "$GEMINI_API_KEY" ]; then
+    echo "Error: Could not read GEMINI_API_KEY from gemini.ini"
+    echo "Please ensure gemini.ini exists in the repository root and contains 'api_key = your-key'"
     exit 1
 fi
 
@@ -347,49 +365,30 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Save review to file in the repository root
-REPO_ROOT=$(git rev-parse --show-toplevel)
-REVIEW_FILE="$REPO_ROOT/commit_review_$(date +%Y%m%d_%H%M%S).md"
-echo "$REVIEW_RESULT" > "$REVIEW_FILE"
-
 # Display results
 echo ""
 echo "=== AI Code Review Results ==="
 echo "$REVIEW_RESULT"
-echo ""
-echo "Review saved to: $REVIEW_FILE"
 
-# Check if there are no issues (similar to lambda logic)
+# Check if there are no issues
+POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+if [ -f "$POST_PUSH_SCRIPT" ]; then
+    echo "=== Executing pr-details script... ==="
+    echo "$pushed_refs" | "$POST_PUSH_SCRIPT"
+fi
+
 if has_no_issues "$REVIEW_RESULT"; then
     echo ""
-    echo "✅ No issues found in the code review!"
+    echo "✅ No issues found in the code review! Proceeding with push."
     echo ""
-    echo "¿Desea proceder con el push? (y/N): "
-    read -r user_response
-    case "$user_response" in
-        [yY]|[yY][eE][sS])
-            echo "Procediendo con el push..."
-            ;;
-        *)
-            echo "Push cancelado por el usuario."
-            exit 1
-            ;;
-    esac
 else
     echo ""
     echo "⚠️  Issues found in the code review. Please review the feedback above."
+    echo "[pre-push hook] *** PUSH REJECTED BY AI CODE REVIEW ***"
+    echo "[pre-push hook] Issues found. Please fix them or use SKIP_AI_REVIEW=1 to bypass."
     echo ""
-    echo "¿Desea proceder con el push de todas maneras? (y/N): "
-    read -r user_response
-    case "$user_response" in
-        [yY]|[yY][eE][sS])
-            echo "Procediendo con el push (issues ignorados)..."
-            ;;
-        *)
-            echo "Push cancelado. Corrija los problemas detectados antes de hacer push."
-            exit 1
-            ;;
-    esac
+    # Exit with 1 to block the push
+    exit 1
 fi
 
-echo "=== Post-commit review completed ==="
+echo "=== Pre-push review completed ==="
