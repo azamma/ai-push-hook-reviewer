@@ -179,7 +179,7 @@ filter_diff_content() {
 escape_json() {
     local input="$1"
     # Escape backslashes, quotes, and newlines for JSON
-    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
+    echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
 }
 
 # Function to call Gemini API
