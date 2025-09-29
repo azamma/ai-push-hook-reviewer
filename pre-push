@@ -21,9 +21,7 @@ GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//
 GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
 # Minimum number of changes required for review (default: 1)
-MIN_CHANGES=1
-
-
+MIN_CHANGES=15
 PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/review_prompt_template.txt"
 
 # ============================================================================
