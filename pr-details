@@ -17,8 +17,47 @@ GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//
 GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
 # Path to the prompt template file (relative to the script directory)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/pr_details_prompt_template.txt"
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+
+# Color codes for better log visibility
+COLOR_RESET='\033[0m'
+COLOR_INFO='\033[0;36m'      # Cyan
+COLOR_SUCCESS='\033[0;32m'   # Green
+COLOR_WARNING='\033[0;33m'   # Yellow
+COLOR_ERROR='\033[0;31m'     # Red
+COLOR_DEBUG='\033[0;90m'     # Gray
+
+# Log functions
+log_info() {
+    echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} $1"
+}
+
+log_success() {
+    echo -e "${COLOR_SUCCESS}[SUCCESS]${COLOR_RESET} $1"
+}
+
+log_warning() {
+    echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} $1"
+}
+
+log_error() {
+    echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1"
+}
+
+log_debug() {
+    echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} $1"
+}
+
+log_section() {
+    echo ""
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo -e "${COLOR_INFO}  $1${COLOR_RESET}"
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
+}
 
 # ============================================================================
 # FUNCTIONS
@@ -26,9 +65,18 @@ PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/pr_details_prompt_template.tx
 
 # Function to check if required tools are available
 check_dependencies() {
+    log_info "Checking dependencies..."
+
     if ! command -v curl >/dev/null 2>&1; then
-        echo "Error: curl is required but not installed."
+        log_error "curl is required but not installed"
         exit 1
+    fi
+    log_debug "curl: ✓ Found"
+
+    if ! command -v jq >/dev/null 2>&1; then
+        log_warning "jq is not installed - JSON response formatting will be limited"
+    else
+        log_debug "jq: ✓ Found"
     fi
 }
 
@@ -42,8 +90,11 @@ escape_json() {
 # Function to call Gemini API
 call_gemini_api() {
     local prompt="$1"
-    local temp_response="/tmp/gemini_response_$$.json"
-    local temp_payload="/tmp/gemini_payload_$$.json"
+    local temp_response="/tmp/gemini_pr_response_$$.json"
+    local temp_payload="/tmp/gemini_pr_payload_$$.json"
+
+    log_info "Calling Gemini API for PR details generation..."
+    log_debug "Using model: gemini-2.5-pro"
 
     # Escape the prompt for JSON
     local escaped_prompt
@@ -64,7 +115,10 @@ call_gemini_api() {
 }
 EOF
 
+    log_debug "Payload size: $(wc -c < "$temp_payload") bytes"
+
     # Make API call to Gemini
+    local start_time=$(date +%s)
     curl -s -X POST \
         -H "Content-Type: application/json" \
         -d @"$temp_payload" \
@@ -72,23 +126,28 @@ EOF
         > "$temp_response"
 
     local curl_exit_code=$?
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
     rm -f "$temp_payload"
 
     if [ $curl_exit_code -ne 0 ]; then
-        echo "Error: Failed to call Gemini API"
+        log_error "Failed to call Gemini API (curl exit code: $curl_exit_code)"
         rm -f "$temp_response"
         return 1
     fi
+
+    log_debug "API response received in ${duration}s"
 
     # Extract text from response
     if command -v jq >/dev/null 2>&1; then
         local response_text
         response_text=$(jq -r '.candidates[0].content.parts[0].text // "Error: No response text found"' "$temp_response" 2>/dev/null)
         if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
+            log_success "Successfully received PR details response"
             echo "$response_text"
         else
-            echo "Error: Unable to parse Gemini API response" >&2
-            echo "Response content:" >&2
+            log_error "Unable to parse Gemini API response"
+            log_debug "Response content:"
             cat "$temp_response" >&2
             rm -f "$temp_response"
             return 1
@@ -97,7 +156,7 @@ EOF
         # Fallback if jq is not available - try basic text extraction
         local response_content
         response_content=$(cat "$temp_response")
-        echo "Raw API Response (jq not available):" >&2
+        log_warning "jq not available - showing raw API response"
         echo "$response_content" >&2
     fi
 
@@ -108,11 +167,12 @@ EOF
 # Function to load prompt template from external file
 load_prompt_template() {
     if [ ! -f "$PROMPT_TEMPLATE_FILE" ]; then
-        echo "Error: Prompt template file not found at: $PROMPT_TEMPLATE_FILE"
-        echo "Make sure the pr_details_prompt_template.txt file exists in the hooks directory."
+        log_error "Prompt template file not found at: $PROMPT_TEMPLATE_FILE"
+        log_error "Make sure the pr_details_prompt_template.txt file exists in the hooks directory"
         exit 1
     fi
 
+    log_debug "Loading prompt template from: $PROMPT_TEMPLATE_FILE"
     cat "$PROMPT_TEMPLATE_FILE"
 }
 
@@ -120,20 +180,30 @@ load_prompt_template() {
 # MAIN LOGIC
 # ============================================================================
 
-echo "=== Post-push PR Details Generation ==="
+# Check if SKIP_PR_DETAILS flag is set
+if [ "${SKIP_PR_DETAILS:-false}" = true ]; then
+    log_info "SKIP_PR_DETAILS flag detected - skipping PR details generation"
+    exit 0
+fi
+
+log_section "PR DETAILS GENERATION"
 
 # Check if API key is configured
 if [ -z "$GEMINI_API_KEY" ]; then
-    echo "Error: Could not read GEMINI_API_KEY from gemini.ini"
-    echo "Please ensure gemini.ini exists in the repository root and contains 'api_key = your-key'"
+    log_error "Could not read GEMINI_API_KEY from gemini.ini"
+    log_error "Please ensure gemini.ini exists in $SCRIPT_DIR and contains 'api_key = your-key'"
     exit 1
 fi
+
+log_success "API key configured"
 
 # Check dependencies
 check_dependencies
 
 # Read the pushed refs from stdin
 refs_processed=false
+processed_count=0
+
 while read local_ref local_sha remote_ref remote_sha; do
     # Skip empty lines
     if [ -z "$local_ref" ]; then
@@ -144,38 +214,41 @@ while read local_ref local_sha remote_ref remote_sha; do
 
     # We only care about branches, not tags
     if [[ $local_ref != refs/heads/* ]]; then
+        log_debug "Skipping non-branch ref: $local_ref"
         continue
     fi
 
     # Get the range of commits that were pushed
     # If the remote branch was deleted, we can't get a diff
     if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        log_warning "Branch was deleted, skipping"
         continue
     fi
 
     # If the remote branch is new, diff against the parent of the first commit
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
         remote_sha=$(git rev-parse $local_sha^1)
+        log_info "New branch detected, comparing against parent commit"
     fi
 
-    echo "Generating diff for $remote_sha..$local_sha"
+    log_info "Generating diff for range: ${remote_sha:0:8}..${local_sha:0:8}"
     DIFF_CONTENT=$(git diff "$remote_sha" "$local_sha")
 
     if [ -z "$DIFF_CONTENT" ]; then
-        echo "No changes detected in this push. Skipping PR details generation."
+        log_warning "No changes detected in this push - skipping PR details generation"
         continue
     fi
 
     # Load the prompt template from external file
-    echo "Loading prompt template..."
+    log_info "Loading PR details prompt template..."
     PR_DETAILS_PROMPT=$(load_prompt_template)
 
     # Create the full prompt
     FULL_PROMPT="The git diff is:
 
-    
+
     $DIFF_CONTENT
-    
+
 
     $PR_DETAILS_PROMPT"
 
@@ -183,7 +256,7 @@ while read local_ref local_sha remote_ref remote_sha; do
     PR_DETAILS_RESULT=$(call_gemini_api "$FULL_PROMPT")
 
     if [ $? -ne 0 ]; then
-        echo "Error: Failed to generate PR details"
+        log_error "Failed to generate PR details"
         continue
     fi
 
@@ -192,8 +265,13 @@ while read local_ref local_sha remote_ref remote_sha; do
     FILENAME="PR_DETAILS_$(echo $BRANCH_NAME | sed 's/\//_/g')_$(date +%Y%m%d%H%M%S).md"
     echo "$PR_DETAILS_RESULT" > "$FILENAME"
 
-    echo "PR details saved to $FILENAME"
+    log_success "PR details saved to: $FILENAME"
+    ((processed_count++))
 done
 
-
-echo "=== Post-push PR details generation completed ==="
+if [ $refs_processed = false ]; then
+    log_warning "No refs were processed"
+else
+    log_section "PR DETAILS GENERATION COMPLETED"
+    log_success "Total files generated: $processed_count"
+fi
