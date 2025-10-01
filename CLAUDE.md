@@ -65,8 +65,14 @@ Optional but recommended:
 # Normal push (will trigger review)
 git push
 
-# Bypass AI review temporarily
-SKIP_AI_REVIEW=1 git push
+# Skip only AI review (PR details will still be generated)
+SKIP=10 git push
+
+# Skip only PR details (AI review will still run)
+SKIP=01 git push
+
+# Skip both
+SKIP=11 git push
 ```
 
 ### Working with the Scripts

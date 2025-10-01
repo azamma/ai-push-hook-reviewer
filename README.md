@@ -56,22 +56,23 @@ Now, the hook will run automatically every time you `git push`.
 
 #### Bypassing the hook
 
-You can control which parts of the AI processing to skip using the `SKIP_AI` environment variable:
+You can control which parts of the AI processing to skip using the `SKIP` environment variable:
 
 ```bash
 # Skip only the AI review (PR details will still be generated)
-SKIP_AI=10 git push
+SKIP=10 git push
 
 # Skip only the PR details generation (AI review will still run)
-SKIP_AI=01 git push
+SKIP=01 git push
 
 # Skip both AI review and PR details generation
-SKIP_AI=11 git push
+SKIP=11 git push
 ```
 
-**Legacy flag**: The `SKIP_AI_REVIEW` variable is still supported for backward compatibility:
+**Legacy flags**: For backward compatibility, `SKIP_AI` and `SKIP_AI_REVIEW` are still supported:
 ```bash
-SKIP_AI_REVIEW=1 git push  # Same as SKIP_AI=10
+SKIP_AI=10 git push        # Deprecated, use SKIP=10
+SKIP_AI_REVIEW=1 git push  # Deprecated, use SKIP=10
 ```
 
 ### `pr-details` Script

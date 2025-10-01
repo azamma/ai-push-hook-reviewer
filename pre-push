@@ -9,10 +9,10 @@
 # cp prompt_template.txt .git/hooks/
 # chmod +x .git/hooks/pre-push
 #
-# SKIP_AI flag usage:
-# SKIP_AI=10 git push  # Skip only AI review
-# SKIP_AI=01 git push  # Skip only PR details generation
-# SKIP_AI=11 git push  # Skip both AI review and PR details
+# SKIP flag usage:
+# SKIP=10 git push  # Skip only AI review
+# SKIP=01 git push  # Skip only PR details generation
+# SKIP=11 git push  # Skip both AI review and PR details
 
 # ============================================================================
 # CONFIGURATION - MODIFY THESE VALUES
@@ -74,39 +74,48 @@ log_section() {
 # SKIP FLAGS HANDLING
 # ============================================================================
 
-# Parse SKIP_AI flag
-# SKIP_AI=10 -> Skip review only
-# SKIP_AI=01 -> Skip PR details only
-# SKIP_AI=11 -> Skip both
+# Parse SKIP flag
+# SKIP=10 -> Skip review only
+# SKIP=01 -> Skip PR details only
+# SKIP=11 -> Skip both
 SKIP_REVIEW=false
 SKIP_PR_DETAILS=false
 
-if [ -n "${SKIP_AI:-}" ]; then
-    case "$SKIP_AI" in
+if [ -n "${SKIP:-}" ]; then
+    case "$SKIP" in
         10)
             SKIP_REVIEW=true
-            log_warning "SKIP_AI=10 detected - AI review will be skipped"
+            log_warning "SKIP=10 detected - AI review will be skipped"
             ;;
         01)
             SKIP_PR_DETAILS=true
-            log_warning "SKIP_AI=01 detected - PR details generation will be skipped"
+            log_warning "SKIP=01 detected - PR details generation will be skipped"
             ;;
         11)
             SKIP_REVIEW=true
             SKIP_PR_DETAILS=true
-            log_warning "SKIP_AI=11 detected - Both AI review and PR details will be skipped"
+            log_warning "SKIP=11 detected - Both AI review and PR details will be skipped"
             ;;
         *)
-            log_error "Invalid SKIP_AI value: $SKIP_AI (valid values: 10, 01, 11)"
+            log_error "Invalid SKIP value: $SKIP (valid values: 10, 01, 11)"
             exit 1
             ;;
     esac
 fi
 
-# Support legacy SKIP_AI_REVIEW flag
+# Support legacy flags
+if [ -n "${SKIP_AI:-}" ]; then
+    log_warning "SKIP_AI is deprecated, please use SKIP instead"
+    case "$SKIP_AI" in
+        10) SKIP_REVIEW=true ;;
+        01) SKIP_PR_DETAILS=true ;;
+        11) SKIP_REVIEW=true; SKIP_PR_DETAILS=true ;;
+    esac
+fi
+
 if [ -n "${SKIP_AI_REVIEW:-}" ]; then
     SKIP_REVIEW=true
-    log_warning "SKIP_AI_REVIEW detected (legacy flag) - AI review will be skipped"
+    log_warning "SKIP_AI_REVIEW is deprecated, please use SKIP=10 instead"
 fi
 
 # ============================================================================
@@ -507,7 +516,7 @@ else
     echo ""
     log_error "⚠️  Issues found in the code review. Please review the feedback above."
     log_error "*** PUSH REJECTED BY AI CODE REVIEW ***"
-    log_info "To bypass this check, use: SKIP_AI=10 git push"
+    log_info "To bypass this check, use: SKIP=10 git push"
     echo ""
     # Exit with 1 to block the push
     exit 1
