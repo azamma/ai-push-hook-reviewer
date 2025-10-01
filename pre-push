@@ -19,7 +19,8 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INI_FILE="$SCRIPT_DIR/gemini.ini"
+RESOURCES_DIR="$SCRIPT_DIR/pre-push-resources"
+INI_FILE="$RESOURCES_DIR/gemini.ini"
 
 # Read API key and URL from gemini.ini
 GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
@@ -27,7 +28,7 @@ GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//
 
 # Minimum number of changes required for review (default: 1)
 MIN_CHANGES=15
-PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/review_prompt_template.txt"
+PROMPT_TEMPLATE_FILE="$RESOURCES_DIR/prompt_templates/review_prompt_template.txt"
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -390,7 +391,7 @@ has_no_issues() {
 # Capture stdin for post-push
 pushed_refs=$(cat)
 
-log_section "PRE-PUSH AI CODE REVIEW"
+log_section "PRE-PUSH AI CODE REVIEW by Zamma"
 
 # Check if we should skip both
 if [ "$SKIP_REVIEW" = true ] && [ "$SKIP_PR_DETAILS" = true ]; then
@@ -401,10 +402,9 @@ fi
 # Check if we should skip only the review
 if [ "$SKIP_REVIEW" = true ]; then
     log_info "Skipping AI review - proceeding to PR details generation"
-    POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+    POST_PUSH_SCRIPT="$RESOURCES_DIR/pr-details"
     if [ -f "$POST_PUSH_SCRIPT" ] && [ "$SKIP_PR_DETAILS" = false ]; then
-        log_section "PR DETAILS GENERATION"
-        SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT" <<< "$pushed_refs"
+        echo "$pushed_refs" | SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT"
     fi
     exit 0
 fi
@@ -412,7 +412,7 @@ fi
 # Check if API key is configured
 if [ -z "$GEMINI_API_KEY" ]; then
     log_error "Could not read GEMINI_API_KEY from gemini.ini"
-    log_error "Please ensure gemini.ini exists in $SCRIPT_DIR and contains 'api_key = your-key'"
+    log_error "Please ensure gemini.ini exists in $RESOURCES_DIR and contains 'api_key = your-key'"
     exit 1
 fi
 
@@ -447,10 +447,9 @@ fi
 # Check if there are enough changes to warrant review
 if ! has_minimum_changes "$DIFF_CONTENT"; then
     # Still run PR details if not skipped
-    POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+    POST_PUSH_SCRIPT="$RESOURCES_DIR/pr-details"
     if [ -f "$POST_PUSH_SCRIPT" ] && [ "$SKIP_PR_DETAILS" = false ]; then
-        log_section "PR DETAILS GENERATION"
-        SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT" <<< "$pushed_refs"
+        echo "$pushed_refs" | SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT"
     fi
     exit 0
 fi
@@ -462,10 +461,9 @@ FILTERED_DIFF=$(filter_diff_content "$DIFF_CONTENT")
 if [ -z "$FILTERED_DIFF" ]; then
     log_warning "No relevant files found for review - skipping"
     # Still run PR details if not skipped
-    POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+    POST_PUSH_SCRIPT="$RESOURCES_DIR/pr-details"
     if [ -f "$POST_PUSH_SCRIPT" ] && [ "$SKIP_PR_DETAILS" = false ]; then
-        log_section "PR DETAILS GENERATION"
-        SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT" <<< "$pushed_refs"
+        echo "$pushed_refs" | SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT"
     fi
     exit 0
 fi
@@ -495,10 +493,9 @@ log_section "AI CODE REVIEW RESULTS"
 echo "$REVIEW_RESULT"
 
 # Execute PR details script if not skipped
-POST_PUSH_SCRIPT="$SCRIPT_DIR/pr-details"
+POST_PUSH_SCRIPT="$RESOURCES_DIR/pr-details"
 if [ -f "$POST_PUSH_SCRIPT" ] && [ "$SKIP_PR_DETAILS" = false ]; then
-    log_section "PR DETAILS GENERATION"
-    SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT" <<< "$pushed_refs"
+    echo "$pushed_refs" | SKIP_PR_DETAILS=$SKIP_PR_DETAILS "$POST_PUSH_SCRIPT"
 fi
 
 # Check if there are no issues

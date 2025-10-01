@@ -4,18 +4,21 @@ This project provides a set of scripts that leverage the Gemini API to automate 
 
 ## File Structure
 
-- `pre-push`: A git hook script that automatically reviews code changes before they are pushed. It will also trigger the `pr-details` script.
-- `pr-details`: A script that generates a detailed description of the changes in a push, suitable for a pull request body. This script is called automatically by the `pre-push` hook.
-- `gemini.ini`: The configuration file for storing your Gemini API key and API URL.
-- `prompt_templates/`: A directory containing the prompt templates for the different scripts.
+- `pre-push`: The main git hook script that automatically reviews code changes before they are pushed
+- `pre-push-resources/`: Directory containing all supporting files:
+  - `pr-details`: Script that generates detailed PR descriptions
+  - `gemini.ini`: Configuration file for Gemini API key and URL
+  - `prompt_templates/`: Directory with prompt templates for both scripts
+    - `review_prompt_template.txt`: Template for code review
+    - `pr_details_prompt_template.txt`: Template for PR details generation
 
-All these files and directories should be placed inside the `.git/hooks` directory of your target repository.
+The `pre-push` script and `pre-push-resources/` directory should be placed inside the `.git/hooks` directory of your target repository.
 
 ## Configuration
 
-Both scripts use the `gemini.ini` file for configuration. This file should be placed in your `.git/hooks` directory.
+Both scripts use the `gemini.ini` file for configuration. This file is located in `pre-push-resources/gemini.ini`.
 
-Create the `gemini.ini` file with the following content:
+Edit the `pre-push-resources/gemini.ini` file with the following content:
 
 ```ini
 [gemini]
@@ -33,17 +36,20 @@ The `pre-push` script is a git hook that automatically reviews your code for pot
 
 #### Setup
 
-1.  **Copy all the scripts and configuration files to your git hooks directory:**
+1.  **Copy the pre-push script and resources directory to your git hooks directory:**
     ```bash
     cp pre-push .git/hooks/
-    cp pr-details .git/hooks/
-    cp gemini.ini .git/hooks/
-    cp -r prompt_templates .git/hooks/
+    cp -r pre-push-resources .git/hooks/
     ```
 2.  **Make the scripts executable:**
     ```bash
     chmod +x .git/hooks/pre-push
-    chmod +x .git/hooks/pr-details
+    chmod +x .git/hooks/pre-push-resources/pr-details
+    ```
+3.  **Configure your API key:**
+    ```bash
+    # Edit the gemini.ini file with your API key
+    nano .git/hooks/pre-push-resources/gemini.ini
     ```
 
 Now, the hook will run automatically every time you `git push`.

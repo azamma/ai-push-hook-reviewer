@@ -10,14 +10,15 @@
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INI_FILE="$SCRIPT_DIR/gemini.ini"
+RESOURCES_DIR="$SCRIPT_DIR"
+INI_FILE="$RESOURCES_DIR/gemini.ini"
 
 # Read API key and URL from gemini.ini
 GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*$//')
 
 # Path to the prompt template file (relative to the script directory)
-PROMPT_TEMPLATE_FILE="$SCRIPT_DIR/prompt_templates/pr_details_prompt_template.txt"
+PROMPT_TEMPLATE_FILE="$RESOURCES_DIR/prompt_templates/pr_details_prompt_template.txt"
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -176,6 +177,40 @@ load_prompt_template() {
     cat "$PROMPT_TEMPLATE_FILE"
 }
 
+# Function to generate PR details from diff content
+generate_pr_details() {
+    local diff_content="$1"
+    local branch_name="$2"
+
+    # Load the prompt template from external file
+    log_info "Loading PR details prompt template..."
+    PR_DETAILS_PROMPT=$(load_prompt_template)
+
+    # Create the full prompt
+    FULL_PROMPT="The git diff is:
+
+
+    $diff_content
+
+
+    $PR_DETAILS_PROMPT"
+
+    # Call Gemini API
+    PR_DETAILS_RESULT=$(call_gemini_api "$FULL_PROMPT")
+
+    if [ $? -ne 0 ]; then
+        log_error "Failed to generate PR details"
+        return 1
+    fi
+
+    # Save the result to a markdown file
+    FILENAME="PR_DETAILS_$(echo $branch_name | sed 's/\//_/g')_$(date +%Y%m%d%H%M%S).md"
+    echo "$PR_DETAILS_RESULT" > "$FILENAME"
+
+    log_success "PR details saved to: $FILENAME"
+    return 0
+}
+
 # ============================================================================
 # MAIN LOGIC
 # ============================================================================
@@ -191,7 +226,7 @@ log_section "PR DETAILS GENERATION"
 # Check if API key is configured
 if [ -z "$GEMINI_API_KEY" ]; then
     log_error "Could not read GEMINI_API_KEY from gemini.ini"
-    log_error "Please ensure gemini.ini exists in $SCRIPT_DIR and contains 'api_key = your-key'"
+    log_error "Please ensure gemini.ini exists in $RESOURCES_DIR and contains 'api_key = your-key'"
     exit 1
 fi
 
@@ -200,78 +235,108 @@ log_success "API key configured"
 # Check dependencies
 check_dependencies
 
-# Read the pushed refs from stdin
-refs_processed=false
-processed_count=0
+# Check if we're being called from pre-push hook (with stdin) or standalone
+# Read from stdin (if available from pre-push hook)
+refs_input=$(cat)
 
-while read local_ref local_sha remote_ref remote_sha; do
-    # Skip empty lines
-    if [ -z "$local_ref" ]; then
-        continue
+if [ -n "$refs_input" ]; then
+    log_debug "Processing refs from pre-push hook stdin"
+
+    # Process refs from stdin (traditional post-push behavior)
+    processed_count=0
+    while read local_ref local_sha remote_ref remote_sha; do
+        # Skip empty lines
+        if [ -z "$local_ref" ]; then
+            continue
+        fi
+
+        log_debug "Processing ref: $local_ref ($local_sha -> $remote_sha)"
+
+        # We only care about branches, not tags
+        if [[ $local_ref != refs/heads/* ]]; then
+            log_debug "Skipping non-branch ref: $local_ref"
+            continue
+        fi
+
+        # Get the range of commits that were pushed
+        # If the remote branch was deleted, we can't get a diff
+        if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+            log_warning "Branch was deleted, skipping"
+            continue
+        fi
+
+        # If the remote branch is new, diff against the parent of the first commit
+        if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+            remote_sha=$(git rev-parse $local_sha^1 2>/dev/null)
+            log_info "New branch detected, comparing against parent commit"
+        fi
+
+        log_info "Generating diff for range: ${remote_sha:0:8}..${local_sha:0:8}"
+        DIFF_CONTENT=$(git diff "$remote_sha" "$local_sha" 2>/dev/null)
+
+        if [ -z "$DIFF_CONTENT" ]; then
+            log_warning "No changes detected in this push - skipping PR details generation"
+            continue
+        fi
+
+        # Get branch name for filename
+        BRANCH_NAME=$(echo $local_ref | sed 's/refs\/heads\///')
+
+        # Generate PR details
+        generate_pr_details "$DIFF_CONTENT" "$BRANCH_NAME"
+        ((processed_count++))
+    done <<< "$refs_input"
+
+    if [ $processed_count -eq 0 ]; then
+        log_warning "No valid refs were processed from stdin"
+    else
+        log_section "PR DETAILS GENERATION COMPLETED"
+        log_success "Total files generated: $processed_count"
+    fi
+else
+    # Called standalone or from pre-push without refs - use current commit
+    log_debug "No stdin input detected - using current HEAD commit"
+
+    # Verify we have a valid commit
+    if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+        log_warning "No commits available for PR details generation"
+        exit 0
     fi
 
-    refs_processed=true
+    CURRENT_COMMIT=$(git rev-parse HEAD)
+    BRANCH_NAME=$(git branch --show-current 2>/dev/null || echo "detached")
 
-    # We only care about branches, not tags
-    if [[ $local_ref != refs/heads/* ]]; then
-        log_debug "Skipping non-branch ref: $local_ref"
-        continue
+    log_info "Generating PR details for current commit: ${CURRENT_COMMIT:0:8}"
+    log_info "Branch: $BRANCH_NAME"
+
+    # Try to get remote tracking branch
+    REMOTE_BRANCH=$(git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+
+    if [ -n "$REMOTE_BRANCH" ]; then
+        # Diff against remote tracking branch
+        log_info "Comparing against remote tracking branch: $REMOTE_BRANCH"
+        DIFF_CONTENT=$(git diff "$REMOTE_BRANCH" HEAD)
+    else
+        # Fallback to parent commit
+        log_info "No remote tracking branch found - comparing against parent commit"
+        PARENT_COMMIT=$(git rev-parse HEAD^1 2>/dev/null)
+        if [ -n "$PARENT_COMMIT" ]; then
+            DIFF_CONTENT=$(git diff "$PARENT_COMMIT" HEAD)
+        else
+            # Initial commit - diff against empty tree
+            EMPTY_TREE=$(git hash-object -t tree /dev/null)
+            DIFF_CONTENT=$(git diff "$EMPTY_TREE" HEAD)
+        fi
     fi
-
-    # Get the range of commits that were pushed
-    # If the remote branch was deleted, we can't get a diff
-    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
-        log_warning "Branch was deleted, skipping"
-        continue
-    fi
-
-    # If the remote branch is new, diff against the parent of the first commit
-    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-        remote_sha=$(git rev-parse $local_sha^1)
-        log_info "New branch detected, comparing against parent commit"
-    fi
-
-    log_info "Generating diff for range: ${remote_sha:0:8}..${local_sha:0:8}"
-    DIFF_CONTENT=$(git diff "$remote_sha" "$local_sha")
 
     if [ -z "$DIFF_CONTENT" ]; then
-        log_warning "No changes detected in this push - skipping PR details generation"
-        continue
+        log_warning "No changes detected - skipping PR details generation"
+        exit 0
     fi
 
-    # Load the prompt template from external file
-    log_info "Loading PR details prompt template..."
-    PR_DETAILS_PROMPT=$(load_prompt_template)
+    # Generate PR details
+    generate_pr_details "$DIFF_CONTENT" "$BRANCH_NAME"
 
-    # Create the full prompt
-    FULL_PROMPT="The git diff is:
-
-
-    $DIFF_CONTENT
-
-
-    $PR_DETAILS_PROMPT"
-
-    # Call Gemini API
-    PR_DETAILS_RESULT=$(call_gemini_api "$FULL_PROMPT")
-
-    if [ $? -ne 0 ]; then
-        log_error "Failed to generate PR details"
-        continue
-    fi
-
-    # Save the result to a markdown file
-    BRANCH_NAME=$(echo $local_ref | sed 's/refs\/heads\///')
-    FILENAME="PR_DETAILS_$(echo $BRANCH_NAME | sed 's/\//_/g')_$(date +%Y%m%d%H%M%S).md"
-    echo "$PR_DETAILS_RESULT" > "$FILENAME"
-
-    log_success "PR details saved to: $FILENAME"
-    ((processed_count++))
-done
-
-if [ $refs_processed = false ]; then
-    log_warning "No refs were processed"
-else
     log_section "PR DETAILS GENERATION COMPLETED"
-    log_success "Total files generated: $processed_count"
+    log_success "File generated successfully"
 fi

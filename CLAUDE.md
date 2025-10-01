@@ -18,22 +18,33 @@ Both scripts are designed for Spring Boot microservices development with emphasi
 1. Copy files to `.git/hooks/` directory of target repository:
 ```bash
 cp pre-push .git/hooks/
-cp pr-details .git/hooks/
-cp gemini.ini .git/hooks/
-cp -r prompt_templates .git/hooks/
+cp -r pre-push-resources .git/hooks/
 ```
 
 2. Make scripts executable:
 ```bash
 chmod +x .git/hooks/pre-push
-chmod +x .git/hooks/pr-details
+chmod +x .git/hooks/pre-push-resources/pr-details
 ```
 
-3. Configure API credentials in `gemini.ini`:
+3. Configure API credentials in `pre-push-resources/gemini.ini`:
 ```ini
 [gemini]
 api_key = your-gemini-api-key-here
 api_url = https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent
+```
+
+### Directory Structure
+
+```
+.git/hooks/
+├── pre-push                          # Main hook script
+└── pre-push-resources/               # Supporting files
+    ├── pr-details                    # PR details generator
+    ├── gemini.ini                    # API configuration
+    └── prompt_templates/             # AI prompt templates
+        ├── review_prompt_template.txt
+        └── pr_details_prompt_template.txt
 ```
 
 ### Dependencies
@@ -145,11 +156,12 @@ The pre-push hook enforces these standards (defined in review_prompt_template.tx
 
 ## Configuration Options
 
-### pre-push Configuration (Lines 13-25)
+### pre-push Configuration (Lines 21-31)
 
 ```bash
-MIN_CHANGES=15                    # Minimum added lines to trigger review
-PROMPT_TEMPLATE_FILE="..."        # Path to review prompt template
+RESOURCES_DIR="$SCRIPT_DIR/pre-push-resources"  # Path to resources directory
+MIN_CHANGES=15                                   # Minimum added lines to trigger review
+PROMPT_TEMPLATE_FILE="$RESOURCES_DIR/prompt_templates/review_prompt_template.txt"
 ```
 
 ### File Filtering Logic (pre-push:134-146)
@@ -191,11 +203,12 @@ The hook blocks push if any of these sections don't contain "_No se encontraron 
 
 To change what gets reviewed or how:
 
-1. **Adjust minimum changes**: Edit `MIN_CHANGES` variable in pre-push:24
-2. **Modify file filters**: Edit `is_relevant_file()` function in pre-push:134-146
-3. **Change review focus**: Edit `prompt_templates/review_prompt_template.txt`
-4. **Customize PR format**: Edit `prompt_templates/pr_details_prompt_template.txt`
-5. **Add/remove issue sections**: Update `has_no_issues()` function in pre-push:263-277
+1. **Adjust minimum changes**: Edit `MIN_CHANGES` variable in pre-push:30
+2. **Modify file filters**: Edit `is_relevant_file()` function in pre-push (around line 224)
+3. **Change review focus**: Edit `pre-push-resources/prompt_templates/review_prompt_template.txt`
+4. **Customize PR format**: Edit `pre-push-resources/prompt_templates/pr_details_prompt_template.txt`
+5. **Add/remove issue sections**: Update `has_no_issues()` function in pre-push (around line 370)
+6. **Change API configuration**: Edit `pre-push-resources/gemini.ini`
 
 ## Working with Gemini API
 
