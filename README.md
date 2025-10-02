@@ -2,6 +2,14 @@
 
 This project provides a set of scripts that leverage the Gemini API to automate parts of the development workflow, including code reviews and pull request detail generation.
 
+## What Does It Do?
+
+✅ **Automatic code review** before each push
+✅ **Blocks pushes** with critical issues detected
+✅ **Generates PR documentation** in markdown automatically
+✅ Validates REST guidelines, Swagger, SOLID and Clean Code
+✅ Detects potential bugs, design issues and edge cases
+
 ## File Structure
 
 - `pre-push`: The main git hook script that automatically reviews code changes before they are pushed
@@ -12,47 +20,97 @@ This project provides a set of scripts that leverage the Gemini API to automate 
     - `review_prompt_template.txt`: Template for code review
     - `pr_details_prompt_template.txt`: Template for PR details generation
 
-The `pre-push` script and `pre-push-resources/` directory should be placed inside the `.git/hooks` directory of your target repository.
+## Setup (Recommended: Global Configuration)
 
-## Configuration
+### Prerequisites
 
-Both scripts use the `gemini.ini` file for configuration. This file is located in `pre-push-resources/gemini.ini`.
+**Install jq** (optional but recommended for better JSON parsing):
 
-Edit the `pre-push-resources/gemini.ini` file with the following content:
+- **Windows (Chocolatey):**
 
-```ini
-[gemini]
-api_key = your-gemini-api-key-here
-api_url = https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent
-```
+  First install Chocolatey. Open **PowerShell as Administrator** and run:
+  ```powershell
+  Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+  ```
 
-Replace `your-gemini-api-key-here` with your actual Gemini API key.
+  Then install jq:
+  ```powershell
+  choco install jq -y
+  ```
 
-## Scripts
+- **Ubuntu/Debian:**
+  ```bash
+  sudo apt-get install jq -y
+  ```
 
-### `pre-push` Hook
+- **macOS:**
+  ```bash
+  brew install jq
+  ```
 
-The `pre-push` script is a git hook that automatically reviews your code for potential issues before you push it. After the review, it will always execute the `pr-details` script to generate the PR details. If the review finds any critical problems, it will still block the push.
+### Global Setup (Works for All Your Projects)
 
-#### Setup
+This is the **recommended approach** - configure once and it works for all your repositories.
 
-1.  **Copy the pre-push script and resources directory to your git hooks directory:**
-    ```bash
-    cp pre-push .git/hooks/
-    cp -r pre-push-resources .git/hooks/
-    ```
-2.  **Make the scripts executable:**
-    ```bash
-    chmod +x .git/hooks/pre-push
-    chmod +x .git/hooks/pre-push-resources/pr-details
-    ```
-3.  **Configure your API key:**
-    ```bash
-    # Edit the gemini.ini file with your API key
-    nano .git/hooks/pre-push-resources/gemini.ini
-    ```
+1. **Configure global hooks directory:**
 
-Now, the hook will run automatically every time you `git push`.
+   Open Git Bash and run:
+   ```bash
+   mkdir -p ~/.git-hooks
+   git config --global core.hooksPath ~/.git-hooks
+   ```
+
+2. **Clone this repository:**
+   ```bash
+   cd ~
+   git clone https://github.com/azamma/ai-push-hook-reviewer.git
+   ```
+
+3. **Copy files to global hooks directory:**
+   ```bash
+   cp ~/ai-push-hook-reviewer/pre-push ~/.git-hooks/
+   cp -r ~/ai-push-hook-reviewer/pre-push-resources ~/.git-hooks/
+   chmod +x ~/.git-hooks/pre-push
+   chmod +x ~/.git-hooks/pre-push-resources/pr-details
+   ```
+
+4. **Configure your Gemini API key:**
+
+   - Get your API key from: https://aistudio.google.com/app/apikey
+   - Edit `~/.git-hooks/pre-push-resources/gemini.ini`
+   - Replace `your-gemini-api-key-here` with your actual API key:
+
+   ```ini
+   [gemini]
+   api_key = YOUR-API-KEY-HERE
+   api_url = https://generativelanguage.googleapis.com/v1/models/gemini-2.5-pro:generateContent
+   ```
+
+Now the hook will run automatically in **all your Git repositories** every time you `git push`.
+
+### Alternative: Per-Project Setup
+
+If you prefer to configure it only for a specific repository:
+
+1. **Copy files to your project's hooks directory:**
+   ```bash
+   cp pre-push .git/hooks/
+   cp -r pre-push-resources .git/hooks/
+   ```
+
+2. **Make scripts executable:**
+   ```bash
+   chmod +x .git/hooks/pre-push
+   chmod +x .git/hooks/pre-push-resources/pr-details
+   ```
+
+3. **Configure your API key:**
+   ```bash
+   # Edit the gemini.ini file with your API key
+   nano .git/hooks/pre-push-resources/gemini.ini
+   ```
+
+## Usage
 
 #### Bypassing the hook
 
