@@ -44,30 +44,30 @@ COLOR_DEBUG='\033[0;90m'     # Gray
 
 # Log functions
 log_info() {
-    echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} $1"
+    echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} $1" >&2
 }
 
 log_success() {
-    echo -e "${COLOR_SUCCESS}[SUCCESS]${COLOR_RESET} $1"
+    echo -e "${COLOR_SUCCESS}[SUCCESS]${COLOR_RESET} $1" >&2
 }
 
 log_warning() {
-    echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} $1"
+    echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} $1" >&2
 }
 
 log_error() {
-    echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1"
+    echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1" >&2
 }
 
 log_debug() {
-    echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} $1"
+    echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} $1" >&2
 }
 
 log_section() {
-    echo ""
-    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${COLOR_INFO}  $1${COLOR_RESET}"
-    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo "" >&2
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${COLOR_INFO}  $1${COLOR_RESET}" >&2
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
 }
 
 # ============================================================================
@@ -509,15 +509,15 @@ fi
 
 # Check if there are no issues
 if has_no_issues "$REVIEW_RESULT"; then
-    echo ""
+    echo "" >&2
     log_success "✅ No issues found in the code review! Proceeding with push."
-    echo ""
+    echo "" >&2
 else
-    echo ""
+    echo "" >&2
     log_error "⚠️  Issues found in the code review. Please review the feedback above."
     log_error "*** PUSH REJECTED BY AI CODE REVIEW ***"
     log_info "To bypass this check, use: SKIP=10 git push"
-    echo ""
+    echo "" >&2
     # Exit with 1 to block the push
     exit 1
 fi

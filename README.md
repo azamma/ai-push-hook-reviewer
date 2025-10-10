@@ -112,7 +112,24 @@ If you prefer to configure it only for a specific repository:
 
 ## Usage
 
-#### Bypassing the hook
+### ⚠️ IMPORTANT: Use Git Bash on Windows
+
+If you're on **Windows**, all `git push` commands must be executed from **Git Bash**, not from CMD or PowerShell. Environment variables like `SKIP` will not work correctly in CMD/PowerShell.
+
+### Normal Usage
+
+Once configured, the hook runs automatically every time you execute `git push` from Git Bash:
+
+```bash
+git push
+```
+
+The hook will:
+1. Review your code changes for issues
+2. Block the push if critical problems are found
+3. Generate a `PR_DETAILS_<branch>_<timestamp>.md` file with PR documentation
+
+### Bypassing the Hook
 
 You can control which parts of the AI processing to skip using the `SKIP` environment variable:
 
@@ -133,43 +150,80 @@ SKIP_AI=10 git push        # Deprecated, use SKIP=10
 SKIP_AI_REVIEW=1 git push  # Deprecated, use SKIP=10
 ```
 
-### `pr-details` Script
+## What Gets Generated
 
-The `pr-details` script generates a detailed summary of the changes you have pushed. It is designed to be called automatically by the `pre-push` hook.
+### 1. Code Review (Console Output)
 
-It will create a new Markdown file in the root of the repository with a name like `PR_DETAILS_<branch-name>_<timestamp>.md`.
+The tool analyzes your code and outputs a structured review with these sections:
 
-## Dependencies
+- **Posibles Bugs** - Logic errors, edge cases, unhandled exceptions
+- **Problemas de Diseño/SOLID** - Violations of SOLID principles, design issues
+- **Problemas de Clean Code** - Readability, naming, duplication, magic numbers
+- **Violaciones de lineamientos REST** - REST API guideline violations
+- **Violaciones de lineamientos de Swagger** - Swagger/OpenAPI documentation issues
 
-- `bash`
-- `curl`
+If critical issues are found in any section, the push will be **blocked**.
+
+### 2. PR Details (Markdown File)
+
+Automatically generates a professional `PR_DETAILS_<branch>_<timestamp>.md` file containing:
+
+- 📊 PR metadata (assignee, ticket, dependencies, API Gateway, DB changes)
+- 📝 Executive summary
+- 🎯 Strategic entry point for code review
+- 🏗️ Technical modifications with code snippets
+- 📋 Index of modified classes
+- 🧪 Test coverage
+- 📈 Impact summary
+
+## Requirements
+
+- `bash` (included in Git Bash for Windows)
+- `curl` (included in modern systems)
 - `git`
-- `jq` (optional, for better JSON parsing)
-
-### Installing `jq`
-
-`jq` is used for more reliable parsing of the JSON response from the Gemini API.
-
--   **Ubuntu/Debian:**
-    ```bash
-    sudo apt-get install jq
-    ```
--   **CentOS/RHEL:**
-    ```bash
-    sudo yum install jq
-    ```
--   **macOS:**
-    ```bash
-    brew install jq
-    ```
--   **Windows (using Chocolatey):**
-    ```bash
-    choco install jq
-    ```
+- `jq` (optional but **highly recommended** for better JSON parsing - see installation above)
 
 ## Troubleshooting
 
-- **"curl command not found"**: Install `curl` on your system.
-- **"Failed to call Gemini API"**: Check your internet connection and ensure your `api_key` in `gemini.ini` is correct.
-- **Hook not running**: Make sure the `pre-push` script is in the `.git/hooks` directory and is executable.
-- **"gemini.ini not found"**: Make sure the `gemini.ini` file is in your `.git/hooks` directory.
+### Hook not executing
+```bash
+git config --global core.hooksPath
+# Should output: /c/Users/YourUser/.git-hooks (or equivalent)
+```
+
+If empty or incorrect, reconfigure:
+```bash
+git config --global core.hooksPath ~/.git-hooks
+```
+
+### SKIP variable not working (Windows)
+- **Solution:** Use **Git Bash** instead of CMD or PowerShell
+
+### Permission denied error
+```bash
+chmod +x ~/.git-hooks/pre-push
+chmod +x ~/.git-hooks/pre-push-resources/pr-details
+```
+
+### "curl command not found"
+- Install `curl` (should be available by default on modern systems)
+
+### "Failed to call Gemini API"
+- Check your internet connection
+- Verify your `api_key` in `gemini.ini` is correct
+- Ensure the API URL is correct
+
+### "gemini.ini not found"
+- For global setup: Check that `~/.git-hooks/pre-push-resources/gemini.ini` exists
+- For per-project setup: Check that `.git/hooks/pre-push-resources/gemini.ini` exists
+
+## Customization
+
+You can customize the AI behavior by editing the prompt templates:
+
+- **Code Review:** Edit `~/.git-hooks/pre-push-resources/prompt_templates/review_prompt_template.txt`
+- **PR Details:** Edit `~/.git-hooks/pre-push-resources/prompt_templates/pr_details_prompt_template.txt`
+
+## Contributing
+
+Feel free to open issues or submit pull requests to improve this tool!

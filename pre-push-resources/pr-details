@@ -34,30 +34,30 @@ COLOR_DEBUG='\033[0;90m'     # Gray
 
 # Log functions
 log_info() {
-    echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} $1"
+    echo -e "${COLOR_INFO}[INFO]${COLOR_RESET} $1" >&2
 }
 
 log_success() {
-    echo -e "${COLOR_SUCCESS}[SUCCESS]${COLOR_RESET} $1"
+    echo -e "${COLOR_SUCCESS}[SUCCESS]${COLOR_RESET} $1" >&2
 }
 
 log_warning() {
-    echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} $1"
+    echo -e "${COLOR_WARNING}[WARNING]${COLOR_RESET} $1" >&2
 }
 
 log_error() {
-    echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1"
+    echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1" >&2
 }
 
 log_debug() {
-    echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} $1"
+    echo -e "${COLOR_DEBUG}[DEBUG]${COLOR_RESET} $1" >&2
 }
 
 log_section() {
-    echo ""
-    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
-    echo -e "${COLOR_INFO}  $1${COLOR_RESET}"
-    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}"
+    echo "" >&2
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
+    echo -e "${COLOR_INFO}  $1${COLOR_RESET}" >&2
+    echo -e "${COLOR_INFO}════════════════════════════════════════════════════════════════${COLOR_RESET}" >&2
 }
 
 # ============================================================================
