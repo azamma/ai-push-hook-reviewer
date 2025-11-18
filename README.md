@@ -129,6 +129,17 @@ The hook will:
 2. Block the push if critical problems are found
 3. Generate a `PR_DETAILS_<branch>_<timestamp>.md` file with PR documentation
 
+### Branch naming and diff base selection
+
+The PR details script inspects the branch name to determine which base branch to use when building the diff:
+
+- Branches containing `/ci/` (for example `azamma/ci/GROW-253`) are compared against `master`.
+- Branches containing `/dev/` (for example `azamma/dev/GROW-253`) are compared against `development`.
+- Branches containing `/release/` (for example `azamma/release/GROW-253`) are compared against `release`.
+- Any other branch falls back to the default behaviour (diff against the push range, or against the tracked remote/parent commit when the script runs standalone).
+
+If the resolved base branch is not available locally the script automatically falls back to the default diff logic, so you can keep working even when you only have the `origin/<branch>` references.
+
 ### Bypassing the Hook
 
 You can control which parts of the AI processing to skip using the `SKIP` environment variable:
