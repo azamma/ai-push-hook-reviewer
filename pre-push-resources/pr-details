@@ -11,11 +11,80 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES_DIR="$SCRIPT_DIR"
-INI_FILE="$RESOURCES_DIR/gemini.ini"
+AI_MODELS_CONFIG="$RESOURCES_DIR/ai-models.yml"
 
-# Read API key and URL from gemini.ini
-GEMINI_API_KEY=$(grep -E '^api_key\s*=' "$INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-GEMINI_API_URL=$(grep -E '^api_url\s*=' "$INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*$//')
+# Model selection (default: 1=Gemini, can be overridden with MODEL env variable)
+MODEL=${MODEL:-1}
+
+# Parse YAML model configuration using bash + awk (no external deps)
+parse_yaml_model() {
+    local model_id="$1"
+    local config_file="$2"
+    local key="$3"
+
+    # Find the model block and extract the key value
+    awk -v id="$model_id" -v k="$key" '
+        /^models:/ { in_models=1; next }
+        in_models && /^  - id: / {
+            current_id=$NF
+            if (current_id == id) { found=1 }
+        }
+        found && /^  - id: / && current_id != id { found=0 }
+        found && $0 ~ "^    " k ": " {
+            # Extract value after the key
+            match($0, /^    [^:]+: (.*)$/, arr)
+            gsub(/["'"'"']/, "", arr[1])  # Remove quotes
+            print arr[1]
+            exit
+        }
+    ' "$config_file"
+}
+
+# Load model configuration from YAML
+load_model_config() {
+    local model_num="$1"
+
+    if [ ! -f "$AI_MODELS_CONFIG" ]; then
+        log_error "Model configuration file not found at: $AI_MODELS_CONFIG"
+        exit 1
+    fi
+
+    # Parse YAML for model details
+    local model_type
+    local model_config_file
+    local response_parser
+
+    model_type=$(parse_yaml_model "$model_num" "$AI_MODELS_CONFIG" "type")
+    model_config_file=$(parse_yaml_model "$model_num" "$AI_MODELS_CONFIG" "config_file")
+    response_parser=$(parse_yaml_model "$model_num" "$AI_MODELS_CONFIG" "response_parser")
+
+    if [ -z "$model_type" ] || [ -z "$model_config_file" ]; then
+        log_error "Model $model_num not found in configuration"
+        exit 1
+    fi
+
+    local model_ini_file="$RESOURCES_DIR/$model_config_file"
+
+    if [ ! -f "$model_ini_file" ]; then
+        log_error "Model config file not found at: $model_ini_file"
+        exit 1
+    fi
+
+    echo "$model_ini_file:$model_type:$response_parser"
+}
+
+# Get model configuration
+MODEL_CONFIG=$(load_model_config "$MODEL")
+MODEL_INI_FILE="${MODEL_CONFIG%%:*}"
+MODEL_TYPE="${MODEL_CONFIG#*:}"
+MODEL_TYPE="${MODEL_TYPE%%:*}"
+RESPONSE_PARSER="${MODEL_CONFIG##*:}"
+
+log_debug "Using MODEL=$MODEL ($MODEL_TYPE)"
+
+# Read API key and URL from the selected model config
+API_KEY=$(grep -E '^api_key\s*=' "$MODEL_INI_FILE" | sed -e 's/api_key\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+API_URL=$(grep -E '^api_url\s*=' "$MODEL_INI_FILE" | sed -e 's/api_url\s*=\s*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
 
 # Path to the prompt template file (relative to the script directory)
 PROMPT_TEMPLATE_FILE="$RESOURCES_DIR/prompt_templates/pr_details_prompt_template.txt"
@@ -88,21 +157,23 @@ escape_json() {
     echo "$input" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g'
 }
 
-# Function to call Gemini API
-call_gemini_api() {
+# Function to call AI API (Gemini or Deepseek)
+call_ai_api() {
     local prompt="$1"
-    local temp_response="/tmp/gemini_pr_response_$$.json"
-    local temp_payload="/tmp/gemini_pr_payload_$$.json"
+    local temp_response="/tmp/ai_pr_response_$$.json"
+    local temp_payload="/tmp/ai_pr_payload_$$.json"
 
-    log_info "Calling Gemini API for PR details generation..."
-    log_debug "Using model: gemini-2.5-pro"
+    log_info "Calling $MODEL_TYPE API for PR details generation..."
+    log_debug "Using model type: $MODEL_TYPE"
 
     # Escape the prompt for JSON
     local escaped_prompt
     escaped_prompt=$(escape_json "$prompt")
 
-    # Create JSON payload
-    cat > "$temp_payload" <<EOF
+    if [ "$MODEL_TYPE" = "gemini" ]; then
+        # Gemini API format
+        log_debug "Using Gemini format"
+        cat > "$temp_payload" <<EOF
 {
   "contents": [
     {
@@ -116,53 +187,123 @@ call_gemini_api() {
 }
 EOF
 
-    log_debug "Payload size: $(wc -c < "$temp_payload") bytes"
+        log_debug "Payload size: $(wc -c < "$temp_payload") bytes"
 
-    # Make API call to Gemini
-    local start_time=$(date +%s)
-    curl -s -X POST \
-        -H "Content-Type: application/json" \
-        -d @"$temp_payload" \
-        "$GEMINI_API_URL?key=$GEMINI_API_KEY" \
-        > "$temp_response"
+        # Make API call to Gemini
+        local start_time=$(date +%s)
+        curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d @"$temp_payload" \
+            "$API_URL?key=$API_KEY" \
+            > "$temp_response"
 
-    local curl_exit_code=$?
-    local end_time=$(date +%s)
-    local duration=$((end_time - start_time))
-    rm -f "$temp_payload"
+        local curl_exit_code=$?
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        rm -f "$temp_payload"
 
-    if [ $curl_exit_code -ne 0 ]; then
-        log_error "Failed to call Gemini API (curl exit code: $curl_exit_code)"
-        rm -f "$temp_response"
-        return 1
-    fi
-
-    log_debug "API response received in ${duration}s"
-
-    # Extract text from response
-    if command -v jq >/dev/null 2>&1; then
-        local response_text
-        response_text=$(jq -r '.candidates[0].content.parts[0].text // "Error: No response text found"' "$temp_response" 2>/dev/null)
-        if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
-            log_success "Successfully received PR details response"
-            echo "$response_text"
-        else
-            log_error "Unable to parse Gemini API response"
-            log_debug "Response content:"
-            cat "$temp_response" >&2
+        if [ $curl_exit_code -ne 0 ]; then
+            log_error "Failed to call $MODEL_TYPE API (curl exit code: $curl_exit_code)"
             rm -f "$temp_response"
             return 1
         fi
-    else
-        # Fallback if jq is not available - try basic text extraction
-        local response_content
-        response_content=$(cat "$temp_response")
-        log_warning "jq not available - showing raw API response"
-        echo "$response_content" >&2
-    fi
 
-    rm -f "$temp_response"
-    return 0
+        log_debug "API response received in ${duration}s"
+
+        # Extract text from response using dynamic parser
+        if command -v jq >/dev/null 2>&1; then
+            local response_text
+            response_text=$(jq -r "$RESPONSE_PARSER // \"Error: No response text found\"" "$temp_response" 2>/dev/null)
+            if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
+                log_success "Successfully received PR details response"
+                echo "$response_text"
+            else
+                log_error "Unable to parse $MODEL_TYPE API response"
+                log_debug "Response content:"
+                cat "$temp_response" >&2
+                rm -f "$temp_response"
+                return 1
+            fi
+        else
+            # Fallback if jq is not available - try basic text extraction
+            local response_content
+            response_content=$(cat "$temp_response")
+            log_warning "jq not available - showing raw API response"
+            echo "$response_content" >&2
+        fi
+
+        rm -f "$temp_response"
+        return 0
+
+    elif [ "$MODEL_TYPE" = "deepseek" ]; then
+        # Deepseek API format (OpenAI compatible)
+        log_debug "Using Deepseek format"
+        cat > "$temp_payload" <<EOF
+{
+  "model": "deepseek-chat",
+  "messages": [
+    {
+      "role": "user",
+      "content": "$escaped_prompt"
+    }
+  ],
+  "stream": false
+}
+EOF
+
+        log_debug "Payload size: $(wc -c < "$temp_payload") bytes"
+
+        # Make API call to Deepseek
+        local start_time=$(date +%s)
+        curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $API_KEY" \
+            -d @"$temp_payload" \
+            "$API_URL" \
+            > "$temp_response"
+
+        local curl_exit_code=$?
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        rm -f "$temp_payload"
+
+        if [ $curl_exit_code -ne 0 ]; then
+            log_error "Failed to call $MODEL_TYPE API (curl exit code: $curl_exit_code)"
+            rm -f "$temp_response"
+            return 1
+        fi
+
+        log_debug "API response received in ${duration}s"
+
+        # Extract text from response using dynamic parser
+        if command -v jq >/dev/null 2>&1; then
+            local response_text
+            response_text=$(jq -r "$RESPONSE_PARSER // \"Error: No response text found\"" "$temp_response" 2>/dev/null)
+            if [ "$response_text" != "null" ] && [ "$response_text" != "Error: No response text found" ]; then
+                log_success "Successfully received PR details response"
+                echo "$response_text"
+            else
+                log_error "Unable to parse $MODEL_TYPE API response"
+                log_debug "Response content:"
+                cat "$temp_response" >&2
+                rm -f "$temp_response"
+                return 1
+            fi
+        else
+            # Fallback if jq is not available - try basic text extraction
+            local response_content
+            response_content=$(cat "$temp_response")
+            log_warning "jq not available - showing raw API response"
+            echo "$response_content" >&2
+        fi
+
+        rm -f "$temp_response"
+        return 0
+    else
+        log_error "Unknown model type: $MODEL_TYPE"
+        rm -f "$temp_payload" "$temp_response"
+        return 1
+    fi
 }
 
 # Function to load prompt template from external file
@@ -195,8 +336,8 @@ generate_pr_details() {
 
     $PR_DETAILS_PROMPT"
 
-    # Call Gemini API
-    PR_DETAILS_RESULT=$(call_gemini_api "$FULL_PROMPT")
+    # Call AI API
+    PR_DETAILS_RESULT=$(call_ai_api "$FULL_PROMPT")
 
     if [ $? -ne 0 ]; then
         log_error "Failed to generate PR details"
@@ -260,9 +401,9 @@ fi
 log_section "PR DETAILS GENERATION"
 
 # Check if API key is configured
-if [ -z "$GEMINI_API_KEY" ]; then
-    log_error "Could not read GEMINI_API_KEY from gemini.ini"
-    log_error "Please ensure gemini.ini exists in $RESOURCES_DIR and contains 'api_key = your-key'"
+if [ -z "$API_KEY" ]; then
+    log_error "Could not read API_KEY from $MODEL_INI_FILE"
+    log_error "Please ensure the model config file exists in $RESOURCES_DIR and contains 'api_key = your-key'"
     exit 1
 fi
 

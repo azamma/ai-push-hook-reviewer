@@ -1,0 +1,21 @@
+# AI Models Configuration
+# Define available AI models and their configurations
+
+default_model: 1
+
+models:
+  - id: 1
+    name: Gemini
+    type: gemini
+    config_file: gemini.ini
+    description: "Google Gemini API - Default model"
+    api_format: gemini
+    response_parser: ".candidates[0].content.parts[0].text"
+
+  - id: 2
+    name: Deepseek
+    type: deepseek
+    config_file: deepseek.ini
+    description: "DeepSeek API - OpenAI compatible format"
+    api_format: openai
+    response_parser: ".choices[0].message.content"
